@@ -25,8 +25,7 @@ export const setTime: SetTime = async (target) => {
 			`Cannot increase current time (${now}) to a moment in the past (${target})`,
 		)
 
-	await provider.send('evm_increaseTime', [diff])
-	await provider.send('evm_mine', [])
+	await provider.send('evm_mine', [target])
 }
 
 export { default as expectRevert } from './expectRevert'

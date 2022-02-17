@@ -1,74 +1,44 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.9;
 
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "./interfaces/ICrowdsale.sol";
 
 /**
  * @title Crowdsale
- * @dev Custom crowdsale contract for tokens launched by Astrano
+ * @dev Perform a crowdsale for an ERC20 token launched by Astrano
  * @custom:security-contact marcel.miro@astrano.io
  */
-contract Crowdsale is ReentrancyGuard {
-    using SafeERC20 for IERC20;
-
-    // Address balances
-    mapping(address => uint256) private _balances;
-
-    // Total number of contributors
-    uint256 private _contributors;
-
-    // Amount of token units sold
-    uint256 private _tokensSold;
-
-    // Has crowdsale ended
-    bool private _finalized;
-
-    // Token sold
+contract Crowdsale is ReentrancyGuard, ICrowdsale {
     IERC20 private immutable _token;
-
-    // Token used to fund crowdsale
     IERC20 private immutable _pairToken;
-
-    // Number of token units a buyer gets per pair token units
-    // For example, a rate of 10 ** decimals will give 1 TKN per wei sent
-    // 1 TKN unit = 1 / (10 ** decimals) TKN
+    address private immutable _owner;
+    address private immutable _finalizer;
     uint256 private immutable _rate;
-
-    // Max amount of token units that the crowdsale is allowed to sell
     uint256 private immutable _cap;
-
-    // Max amount of token units that a wallet can purchase
     uint256 private immutable _individualCap;
-
-    // Min amount of token units that an address can buy per transaction
     uint256 private immutable _minPurchaseAmount;
-
-    // Minimum amount of sold token units required for the crowdsale to be successful
-    // If goal is not reached, all contributions will be refunded to its buyers
     uint256 private immutable _goal;
-
-    // Time crowdsale starts in unix epoch seconds
     uint256 private immutable _openingTime;
-
-    // Time crowdsale ends in unix epoch seconds
     uint256 private immutable _closingTime;
 
-    /**
-     * Event for token purchase logging
-     * @param beneficiary address to receive token
-     * @param value amount of pair tokens sent
-     * @param amount amount of tokens purchased
-     */
-    event TokensPurchased(address indexed beneficiary, uint256 value, uint256 amount);
+    mapping(address => uint256) private _balances;
+    uint256 private _contributors;
+    uint256 private _tokensSold;
+    bool private _finalized;
 
-    // Event for crowdsale finalize logging
+    event TokensPurchased(address indexed beneficiary, uint256 tokenAmount, uint256 pairTokenAmount);
     event Finalized();
+    event Withdraw(address indexed account, uint256 amount);
+    event Refund(address indexed account, uint256 amount);
+    event WithdrawExpiredTokens(uint256 amount);
 
     /**
      * @param tokenAddress_ address of token sold
      * @param pairTokenAddress_ address of token used to fund crowdsale
+     * @param owner_ owner address
+     * @param finalizer_ address that can finalize crowdsale
      * @param rate_ number of token units a buyer gets per pair token units
      * @param cap_ max amount of token units that the crowdsale is allowed to sell
      * @param individualCap_ max amount of token units that a wallet can purchase
@@ -80,6 +50,8 @@ contract Crowdsale is ReentrancyGuard {
     constructor(
         address tokenAddress_,
         address pairTokenAddress_,
+        address owner_,
+        address finalizer_,
         uint256 rate_,
         uint256 cap_,
         uint256 individualCap_,
@@ -88,19 +60,23 @@ contract Crowdsale is ReentrancyGuard {
         uint256 openingTime_,
         uint256 closingTime_
     ) {
-        require(tokenAddress_ != address(0), "Crowdsale: token address is the zero address");
-        require(pairTokenAddress_ != address(0), "Crowdsale: pair token address is the zero address");
+        require(tokenAddress_ != address(0), "token is the zero address");
+        require(pairTokenAddress_ != address(0), "pair token is the zero address");
+        require(owner_ != address(0), "owner is the zero address");
+        require(finalizer_ != address(0), "finalizer is the zero address");
 
-        require(rate_ > 0, "Crowdsale: rate is 0");
-        require(cap_ > 0, "Crowdsale: cap is 0");
-        require(goal_ <= cap_, "Crowdsale: goal is greater than cap");
+        require(rate_ > 0, "rate is 0");
+        require(cap_ > 0, "cap is 0");
+        require(goal_ <= cap_, "goal is greater than cap");
 
-        // solhint-disable-next-line not-rely-on-time
-        require(openingTime_ >= block.timestamp, "Crowdsale: opening time is before current time");
-        require(closingTime_ > openingTime_, "Crowdsale: opening time is not before closing time");
+        /* solhint-disable-next-line not-rely-on-time */
+        require(openingTime_ >= block.timestamp, "opening before current time");
+        require(closingTime_ > openingTime_, "closing not after opening time");
 
         _token = IERC20(tokenAddress_);
         _pairToken = IERC20(pairTokenAddress_);
+        _owner = owner_;
+        _finalizer = finalizer_;
         _rate = rate_;
         _cap = cap_;
         _individualCap = individualCap_;
@@ -113,21 +89,20 @@ contract Crowdsale is ReentrancyGuard {
     /**
      * @return token sold
      */
-    function token() external view returns (address) {
-        return address(_token);
+    function token() external view returns (IERC20) {
+        return _token;
     }
 
     /**
      * @return token used to fund crowdsale
      */
-    function pairToken() external view returns (address) {
-        return address(_pairToken);
+    function pairToken() external view returns (IERC20) {
+        return _pairToken;
     }
 
     /**
      * @return number of token units a buyer gets per pair token units
-     * @dev for example, a rate of 10 ** decimals will give 1 TKN per wei sent
-     * @dev 1 TKN unit = 1 / (10 ** decimals) TKN
+     * @dev For example, a rate of 10 ** 18 will give 1 TKN per wei sent
      */
     function rate() external view returns (uint256) {
         return _rate;
@@ -156,7 +131,6 @@ contract Crowdsale is ReentrancyGuard {
 
     /**
      * @return min amount of sold token units required for the crowdsale to be successful
-     * @dev if goal is not reached, all contributions will be refunded to its buyers
      */
     function goal() external view returns (uint256) {
         return _goal;
@@ -198,47 +172,66 @@ contract Crowdsale is ReentrancyGuard {
     }
 
     /**
-     * @return boolean where true means that the crowdsale has finished
+     * @return has goal been reached
+     */
+    function goalReached() public view returns (bool) {
+        return _tokensSold >= _goal;
+    }
+
+    /**
+     * @return has crowdsale ended
      */
     function hasClosed() public view returns (bool) {
-        // solhint-disable-next-line not-rely-on-time
+        /* solhint-disable-next-line not-rely-on-time */
         return block.timestamp > _closingTime || _tokensSold >= _cap;
     }
 
     /**
-     * @return boolean where true means that the crowdsale is still running
+     * @return is crowdsale open
      */
     function isOpen() public view returns (bool) {
-        // solhint-disable-next-line not-rely-on-time
+        /* solhint-disable-next-line not-rely-on-time */
         return block.timestamp >= _openingTime && !hasClosed();
     }
 
     /**
+     * @return has time to finalize expired
+     */
+    function finalizeExpired() public view returns (bool) {
+        /* solhint-disable-next-line not-rely-on-time */
+        return block.timestamp > _closingTime + 30 * 1 days;
+    }
+
+    /**
+     * @return are refunds active
+     */
+    function refundsActive() public view returns (bool) {
+        return hasClosed() && (!goalReached() || (!_finalized && finalizeExpired()));
+    }
+
+    /**
+     * @dev Purchase tokens. Caller must have `amount_` as the allowance of this contract (spender) for the pair token
      * @param beneficiary_ address to send the sold tokens to
      * @param amount_ amount of pair token units used to purchase tokens
      */
-    function buyTokens(address beneficiary_, uint256 amount_) external nonReentrant {
-        require(isOpen(), "Crowdsale: not open");
+    function buy(address beneficiary_, uint256 amount_) external nonReentrant {
+        require(isOpen(), "crowdsale not open");
 
-        require(beneficiary_ != address(0), "Crowdsale: beneficiary is the zero address");
-        require(amount_ > 0, "Crowdsale: amount is 0");
-        require(amount_ >= _minPurchaseAmount, "Crowdsale: amount is less than min purchase amount");
+        require(beneficiary_ != address(0), "beneficiary is the zero address");
+        require(amount_ > 0, "amount is 0");
+        require(amount_ >= _minPurchaseAmount, "amount less than minimum amount");
 
-        // Calculate token amount to be sold
         uint256 tokenAmount = amount_ * _rate;
-
         uint256 futureBalance = _balances[beneficiary_] + tokenAmount;
-        require(futureBalance <= _individualCap, "Crowdsale: beneficiary's cap exceeded");
-
+        require(futureBalance <= _individualCap, "beneficiary's cap exceeded");
         uint256 futureTokensSold = _tokensSold + tokenAmount;
-        require(futureTokensSold <= _cap, "Crowdsale: cap exceeded");
+        require(futureTokensSold <= _cap, "cap exceeded");
 
-        _pairToken.safeTransferFrom(msg.sender, address(this), amount_);
+        // Revert ordering efficiency
+        SafeERC20.safeTransferFrom(_pairToken, msg.sender, address(this), amount_);
+        require(_token.balanceOf(address(this)) >= futureTokensSold, "insufficient balance");
 
-        // Validate after transferFrom as transferFrom is more likely to fail thus function is more gas efficient
-        require(_token.balanceOf(address(this)) >= futureTokensSold, "Crowdsale: insufficient balance");
-
-        emit TokensPurchased(beneficiary_, amount_, tokenAmount);
+        emit TokensPurchased(beneficiary_, tokenAmount, amount_);
 
         _tokensSold = futureTokensSold;
         _balances[beneficiary_] = futureBalance;
@@ -246,47 +239,66 @@ contract Crowdsale is ReentrancyGuard {
     }
 
     /**
-     * @param beneficiary_ Address whose tokens will be withdrawn
-     */
-    function withdrawTokens(address beneficiary_) external {
-        require(hasClosed(), "Crowdsale: not closed");
-
-        uint256 tokenAmount = _balances[beneficiary_];
-        require(tokenAmount > 0, "Crowdsale: beneficiary is not due any tokens");
-
-        _balances[beneficiary_] = 0;
-        _token.safeTransfer(beneficiary_, tokenAmount);
-    }
-
-    /**
      * @dev Process the end of the crowdsale
      */
-    function finalize() external {
-        require(hasClosed(), "Crowdsale: not closed");
-        require(_tokensSold >= _goal, "Crowdsale: goal not reached");
-        require(!_finalized, "Crowdsale: already finalized");
-
+    function finalize() external returns (uint256) {
+        require(_finalizer == msg.sender, "caller not authorized");
+        require(hasClosed(), "crowdsale not closed");
+        require(goalReached(), "goal not reached");
+        require(!_finalized, "already finalized");
+        require(!finalizeExpired(), "time to finalize has expired");
         _finalized = true;
 
-        // TODO: Generate LP and transfer left over tokens
+        uint256 pairTokenBalance = _pairToken.balanceOf(address(this));
+        _pairToken.approve(_finalizer, pairTokenBalance);
+        SafeERC20.safeTransfer(_pairToken, _finalizer, pairTokenBalance);
+        uint256 tokenBalance = _token.balanceOf(address(this));
+        uint256 remainingTokenAmount;
+        unchecked {
+            remainingTokenAmount = tokenBalance - _tokensSold;
+        }
+        if (remainingTokenAmount > 0) {
+            _token.transfer(_finalizer, remainingTokenAmount);
+        }
 
         emit Finalized();
+        // TODO: Delete variables not used anymore to save gas? (e.g. finalizer)
+        return pairTokenBalance;
     }
 
     /**
-     * @dev Refund tokens bought by `beneficiary_`
+     * @dev Withdraw tokens purchased
+     * @param account address that withdraws the purchased tokens
      */
-    function claimRefund(address beneficiary_) external {
-        require(hasClosed() && _tokensSold < _goal, "Crowdsale: refunds not due");
+    function withdraw(address account) external {
+        require(_finalized, "crowdsale not finalized");
+        uint256 tokenAmount = _balances[account];
+        require(tokenAmount > 0, "beneficiary not due any tokens");
+        _balances[account] = 0;
+        SafeERC20.safeTransfer(_token, account, tokenAmount);
+        emit Withdraw(account, tokenAmount);
+    }
 
-        uint256 amount = _balances[beneficiary_] / _rate;
+    /**
+     * @dev Refund tokens purchased
+     * @param account address that refunds its purchased tokens
+     */
+    function refund(address account) external {
+        require(refundsActive(), "refunds not due");
+        uint256 amount = _balances[account] / _rate;
+        require(amount > 0, "beneficiary not due any tokens");
+        _balances[account] = 0;
+        SafeERC20.safeTransfer(_pairToken, account, amount);
+        emit Refund(account, amount);
+    }
 
-        require(amount > 0, "Crowdsale: beneficiary is not due any tokens");
-
-        _balances[beneficiary_] = 0;
-
-        _pairToken.safeTransfer(beneficiary_, amount);
-
-        // emit Refund(beneficiary_, amount);
+    /**
+     * @dev Withdraw `token` balance when crowdsale has expired
+     */
+    function withdrawExpiredTokens() external {
+        require(refundsActive(), "crowdsale not expired");
+        uint256 tokenBalance = _token.balanceOf(address(this));
+        SafeERC20.safeTransfer(_token, _owner, tokenBalance);
+        emit WithdrawExpiredTokens(tokenBalance);
     }
 }

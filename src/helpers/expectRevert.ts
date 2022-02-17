@@ -7,7 +7,8 @@ type ExpectException = (
 
 const expectException: ExpectException = async (promise, expectedError) => {
 	try {
-		await promise
+		const res = await promise
+		console.log({ res })
 	} catch (error) {
 		if (!(error instanceof Error))
 			return expect.fail('Unexpected exception type received')
