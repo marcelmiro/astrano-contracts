@@ -6,8 +6,6 @@ import { SignerWithAddress } from '@nomiclabs/hardhat-ethers/signers'
 import ProjectFactoryArtifact from '../artifacts/contracts/ProjectFactory.sol/ProjectFactory.json'
 import TokenArtifact from '../artifacts/contracts/Token.sol/Token.json'
 import AstranoVestingWalletArtifact from '../artifacts/contracts/AstranoVestingWallet.sol/AstranoVestingWallet.json'
-import UniswapV2FactoryMockArtifact from '../artifacts/contracts/mocks/UniswapV2FactoryMock.sol/UniswapV2FactoryMock.json'
-import UniswapV2Router02MockArtifact from '../artifacts/contracts/mocks/UniswapV2Router02Mock.sol/UniswapV2Router02Mock.json'
 import TokenFactoryArtifact from '../artifacts/contracts/TokenFactory.sol/TokenFactory.json'
 import CrowdsaleFactoryArtifact from '../artifacts/contracts/CrowdsaleFactory.sol/CrowdsaleFactory.json'
 import VestingWalletFactoryArtifact from '../artifacts/contracts/VestingWalletFactory.sol/VestingWalletFactory.json'
@@ -18,8 +16,8 @@ import { expectRevert, getTime, setTime } from '../src/helpers'
 import { ProjectFactory } from '../src/types/ProjectFactory'
 import { Token } from '../src/types/Token'
 import { AstranoVestingWallet } from '../src/types/AstranoVestingWallet'
-import { UniswapV2FactoryMock } from '../src/types/UniswapV2FactoryMock'
-import { UniswapV2Router02Mock } from '../src/types/UniswapV2Router02Mock'
+import { IUniswapV2Router02 } from '../src/types/IUniswapV2Router02'
+import { IUniswapV2Factory } from '../src/types/IUniswapV2Factory'
 import { TokenFactory } from '../src/types/TokenFactory'
 import { CrowdsaleFactory } from '../src/types/CrowdsaleFactory'
 import { VestingWalletFactory } from '../src/types/VestingWalletFactory'
@@ -34,13 +32,16 @@ const {
 } = ethers
 const { deployContract } = waffle
 
-describe('ProjectFactory', async function () {
+const UNISWAP_FACTORY_ADDR = '0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f'
+const UNISWAP_ROUTER02_ADDR = '0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D'
+
+describe.skip('ProjectFactoryMainnet', async function () {
 	const wallet = '0xD3f0Bcdb117C05b988159d7244eC7c19faB0d56f'
 	let signers: SignerWithAddress[]
 	let projectFactory: ProjectFactory
 	let astranoVestingWallet: AstranoVestingWallet
-	let uniswapV2Factory: UniswapV2FactoryMock
-	let uniswapV2Router: UniswapV2Router02Mock
+	let uniswapV2Factory: IUniswapV2Factory
+	let uniswapV2Router: IUniswapV2Router02
 	let tokenFactory: TokenFactory
 	let crowdsaleFactory: CrowdsaleFactory
 	let vestingWalletFactory: VestingWalletFactory
@@ -80,21 +81,20 @@ describe('ProjectFactory', async function () {
 			[wallet, 300, 300],
 		)) as AstranoVestingWallet
 
-		uniswapV2Factory = (await deployContract(
-			signers[0],
-			UniswapV2FactoryMockArtifact,
-		)) as UniswapV2FactoryMock
+		uniswapV2Factory = (await getContractAt(
+			'IUniswapV2Factory',
+			UNISWAP_FACTORY_ADDR,
+		)) as IUniswapV2Factory
 
-		uniswapV2Router = (await deployContract(
-			signers[0],
-			UniswapV2Router02MockArtifact,
-			[uniswapV2Factory.address],
-		)) as UniswapV2Router02Mock
+		uniswapV2Router = (await getContractAt(
+			'IUniswapV2Router02',
+			UNISWAP_ROUTER02_ADDR,
+		)) as IUniswapV2Router02
 
 		pairToken = (await deployContract(signers[0], TokenArtifact, [
 			'Pair Token',
 			'PTKN',
-			100_000_000,
+			ethers.utils.parseEther((100_000_000).toString()),
 			signers[0].address,
 		])) as Token
 
@@ -685,14 +685,14 @@ describe('ProjectFactory', async function () {
 		const projectInput = {
 			tokenName: 'My Custom Token',
 			tokenSymbol: 'MYCT',
-			tokenTotalSupply: 1000,
+			tokenTotalSupply: ethers.utils.parseEther('1000'),
 			tokenLockStartIn: 5500,
 			tokenLockDuration: 7500,
 			crowdsaleRate: 4,
-			crowdsaleCap: 400,
-			crowdsaleIndividualCap: 400,
+			crowdsaleCap: ethers.utils.parseEther('400'),
+			crowdsaleIndividualCap: ethers.utils.parseEther('400'),
 			crowdsaleMinPurchaseAmount: 1,
-			crowdsaleGoal: 300,
+			crowdsaleGoal: ethers.utils.parseEther('300'),
 			crowdsaleOpeningTime: 0,
 			crowdsaleClosingTime: 0,
 			liquidityRate: 3,
@@ -738,7 +738,7 @@ describe('ProjectFactory', async function () {
 			const { crowdsaleGoal, crowdsaleRate, crowdsaleClosingTime } =
 				projectInput
 
-			const amount = Math.floor(crowdsaleGoal / crowdsaleRate)
+			const amount = crowdsaleGoal.div(crowdsaleRate)
 			await pairToken.approve(crowdsale.address, amount)
 			await crowdsale.buy(signers[0].address, amount)
 
@@ -756,7 +756,7 @@ describe('ProjectFactory', async function () {
 		it('Should finalize crowdsale when finalizing project', async function () {
 			const { crowdsaleCap, crowdsaleRate } = projectInput
 
-			const amount = Math.floor(crowdsaleCap / crowdsaleRate)
+			const amount = crowdsaleCap.div(crowdsaleRate)
 			await pairToken.approve(crowdsale.address, amount)
 			await crowdsale.buy(signers[0].address, amount)
 			await projectFactory.finalizeProject(token.address)
@@ -773,7 +773,7 @@ describe('ProjectFactory', async function () {
 				liquidityRate,
 			} = projectInput
 
-			const amount = Math.floor(crowdsaleCap / crowdsaleRate)
+			const amount = crowdsaleCap.div(crowdsaleRate)
 			await pairToken.approve(crowdsale.address, amount)
 			await crowdsale.buy(signers[0].address, amount)
 			const tx = await projectFactory.finalizeProject(token.address)
@@ -785,20 +785,24 @@ describe('ProjectFactory', async function () {
 			} = await getProjectFinalizedArgs(tx)
 
 			expect(pairTokenAmount).to.equal(amount)
-			const maxLiquidityAmount = Math.floor(
-				((crowdsaleCap / crowdsaleRate) * liquidityPercentage) / 100,
-			)
-			const liquidityAmount = Math.min(
-				pairTokenAmount.toNumber(),
-				maxLiquidityAmount,
-			)
+			const maxLiquidityAmount = crowdsaleCap
+				.div(crowdsaleRate)
+				.mul(liquidityPercentage)
+				.div(100)
+			const liquidityAmount = pairTokenAmount.lte(maxLiquidityAmount)
+				? pairTokenAmount
+				: maxLiquidityAmount
 			expect(remainingPairTokenAmount).to.equal(
 				pairTokenAmount.sub(liquidityAmount),
 			)
 			expect(remainingTokenAmount).to.equal(
-				liquidityRate * (maxLiquidityAmount - liquidityAmount) +
-					crowdsaleCap -
-					amount * crowdsaleRate,
+				crowdsaleCap
+					.add(
+						maxLiquidityAmount
+							.sub(liquidityAmount)
+							.mul(liquidityRate),
+					)
+					.sub(amount.mul(crowdsaleRate)),
 			)
 		})
 
@@ -812,7 +816,7 @@ describe('ProjectFactory', async function () {
 				liquidityRate,
 			} = projectInput
 
-			const amount = Math.floor(crowdsaleGoal / crowdsaleRate) + 3
+			const amount = crowdsaleGoal.div(crowdsaleRate).add(3)
 			await pairToken.approve(crowdsale.address, amount)
 			await crowdsale.buy(signers[0].address, amount)
 			await setTime(crowdsaleClosingTime)
@@ -825,29 +829,31 @@ describe('ProjectFactory', async function () {
 			} = await getProjectFinalizedArgs(tx)
 
 			expect(pairTokenAmount).to.equal(amount)
-			const maxLiquidityAmount = Math.floor(
-				(Math.floor(crowdsaleCap / crowdsaleRate) *
-					liquidityPercentage) /
-					100,
-			)
-			const liquidityAmount = Math.min(
-				pairTokenAmount.toNumber(),
-				maxLiquidityAmount,
-			)
+			const maxLiquidityAmount = crowdsaleCap
+				.div(crowdsaleRate)
+				.mul(liquidityPercentage)
+				.div(100)
+			const liquidityAmount = pairTokenAmount.lte(maxLiquidityAmount)
+				? pairTokenAmount
+				: maxLiquidityAmount
 			expect(remainingPairTokenAmount).to.equal(
 				pairTokenAmount.sub(liquidityAmount),
 			)
 			expect(remainingTokenAmount).to.equal(
-				liquidityRate * (maxLiquidityAmount - liquidityAmount) +
-					crowdsaleCap -
-					amount * crowdsaleRate,
+				crowdsaleCap
+					.add(
+						maxLiquidityAmount
+							.sub(liquidityAmount)
+							.mul(liquidityRate),
+					)
+					.sub(amount.mul(crowdsaleRate)),
 			)
 		})
 
 		it('Should generate liquidity and transfer liquidity tokens to vesting wallet', async function () {
 			const { crowdsaleCap, crowdsaleRate } = projectInput
 
-			const amount = Math.floor(crowdsaleCap / crowdsaleRate)
+			const amount = crowdsaleCap.div(crowdsaleRate)
 			await pairToken.approve(crowdsale.address, amount)
 			await crowdsale.buy(signers[0].address, amount)
 			const tx = await projectFactory.finalizeProject(token.address)
@@ -874,7 +880,7 @@ describe('ProjectFactory', async function () {
 				liquidityRate,
 			} = projectInput
 
-			const amount = Math.floor(crowdsaleCap / crowdsaleRate)
+			const amount = crowdsaleCap.div(crowdsaleRate)
 			await pairToken.approve(crowdsale.address, amount)
 			await crowdsale.buy(signers[0].address, amount)
 
@@ -886,19 +892,17 @@ describe('ProjectFactory', async function () {
 			const { remainingTokenAmount, remainingPairTokenAmount } =
 				await getProjectFinalizedArgs(tx)
 
-			const tokenFeeAmount = Math.floor(
-				(tokenTotalSupply * tokenFee) / 10000,
-			)
-			const maxLiquidityPairTokenAmount = Math.floor(
-				(Math.floor(crowdsaleCap / crowdsaleRate) *
-					liquidityPercentage) /
-					100,
-			)
+			const tokenFeeAmount = tokenTotalSupply.mul(tokenFee).div(10000)
+			const maxLiquidityPairTokenAmount = crowdsaleCap
+				.div(crowdsaleRate)
+				.mul(liquidityPercentage)
+				.div(100)
 			const maxLiquidityTokenAmount =
-				maxLiquidityPairTokenAmount * liquidityRate
-			const requiredTokenAmount =
-				tokenFeeAmount + crowdsaleCap + maxLiquidityTokenAmount
-			const vestedAmount = tokenTotalSupply - requiredTokenAmount
+				maxLiquidityPairTokenAmount.mul(liquidityRate)
+			const requiredTokenAmount = tokenFeeAmount
+				.add(crowdsaleCap)
+				.add(maxLiquidityTokenAmount)
+			const vestedAmount = tokenTotalSupply.sub(requiredTokenAmount)
 
 			const [vestingWalletBalance, afterCreatorPairTokenBalance] =
 				await Promise.all([
@@ -907,7 +911,7 @@ describe('ProjectFactory', async function () {
 				])
 
 			expect(vestingWalletBalance).to.equal(
-				vestedAmount + remainingTokenAmount.toNumber(),
+				vestedAmount.add(remainingTokenAmount),
 			)
 			expect(afterCreatorPairTokenBalance).to.equal(
 				beforeCreatorPairTokenBalance.add(remainingPairTokenAmount),
@@ -917,7 +921,7 @@ describe('ProjectFactory', async function () {
 		it('Should delete project data', async function () {
 			const { crowdsaleCap, crowdsaleRate } = projectInput
 
-			const amount = Math.floor(crowdsaleCap / crowdsaleRate)
+			const amount = crowdsaleCap.div(crowdsaleRate)
 			await pairToken.approve(crowdsale.address, amount)
 			await crowdsale.buy(signers[0].address, amount)
 
@@ -940,7 +944,7 @@ describe('ProjectFactory', async function () {
 		it('Should revert finalize project if project already finalized', async function () {
 			const { crowdsaleCap, crowdsaleRate } = projectInput
 
-			const amount = Math.floor(crowdsaleCap / crowdsaleRate)
+			const amount = crowdsaleCap.div(crowdsaleRate)
 			await pairToken.approve(crowdsale.address, amount)
 			await crowdsale.buy(signers[0].address, amount)
 			await projectFactory.finalizeProject(token.address)
@@ -954,7 +958,7 @@ describe('ProjectFactory', async function () {
 		it('Should revert finalize project if crowdsale not finalizable', async function () {
 			const { crowdsaleCap, crowdsaleRate } = projectInput
 
-			const amount = Math.floor(crowdsaleCap / crowdsaleRate) - 1
+			const amount = crowdsaleCap.div(crowdsaleRate).sub(1)
 			await pairToken.approve(crowdsale.address, amount)
 			await crowdsale.buy(signers[0].address, amount)
 

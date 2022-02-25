@@ -18,17 +18,17 @@ const { deployContract } = waffle
 describe('Token', async function () {
 	let signers: SignerWithAddress[]
 
-	const tokenName = 'My Custom Token'
-	const tokenSymbol = 'MCT'
-	const tokenTotalSupply = 1000
-	const beneficiary = () => signers[1].address
+	const name = 'My Custom Token'
+	const symbol = 'MCT'
+	const totalSupply = 1000
+	const beneficiary = () => signers[5].address
 
 	before(async function () {
 		signers = await getSigners()
 	})
 
 	it('Should create token with correct parameters', async function () {
-		const args = [tokenName, tokenSymbol, tokenTotalSupply, beneficiary()]
+		const args = [name, symbol, totalSupply, beneficiary()]
 
 		const token = (await deployContract(
 			signers[0],
@@ -36,17 +36,25 @@ describe('Token', async function () {
 			args,
 		)) as Token
 
-		expect(await token.name()).to.equal(tokenName)
-		expect(await token.symbol()).to.equal(tokenSymbol)
-		expect(await token.totalSupply()).to.equal(tokenTotalSupply)
-		expect(await token.balanceOf(beneficiary())).to.equal(tokenTotalSupply)
+		const [_name, _symbol, _totalSupply, _beneficiaryBalance] =
+			await Promise.all([
+				token.name(),
+				token.symbol(),
+				token.totalSupply(),
+				token.balanceOf(beneficiary()),
+			])
+
+		expect(_name).to.equal(name)
+		expect(_symbol).to.equal(symbol)
+		expect(_totalSupply).to.equal(totalSupply)
+		expect(_beneficiaryBalance).to.equal(totalSupply)
 	})
 
 	it('Should revert on create contract with incorrect parameters', async function () {
 		const deployBeneficiaryAddressZero = deployContract(
 			signers[0],
 			TokenArtifact,
-			[tokenName, tokenSymbol, tokenTotalSupply, AddressZero],
+			[name, symbol, totalSupply, AddressZero],
 		)
 
 		await expectRevert(

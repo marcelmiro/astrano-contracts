@@ -24,9 +24,10 @@ const expectException: ExpectException = async (promise, expectedError) => {
 
 		const actualError = error.message
 			.replace(
-				/^VM Exception while processing transaction: reverted with reason string '/,
+				/^.*VM Exception while processing transaction: reverted with reason string '/,
 				'',
 			)
+			.replace(/".*/, '')
 			.slice(0, -1)
 
 		expect(actualError).to.equal(

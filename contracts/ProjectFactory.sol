@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.9;
+pragma solidity 0.8.9;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./interfaces/IUniswapV2Factory.sol";
 import "./interfaces/IUniswapV2Router02.sol";
 import "./interfaces/IUniswapV2Pair.sol";
-import "./interfaces/IProjectFactory.sol";
 import "./interfaces/ITokenFactory.sol";
 import "./interfaces/ICrowdsaleFactory.sol";
 import "./interfaces/IVestingWalletFactory.sol";
@@ -19,7 +18,7 @@ import "./interfaces/ICrowdsale.sol";
  * @dev Factory contract that creates and manages projects launched by Astrano
  * @custom:security-contact marcel.miro@astrano.io
  */
-contract ProjectFactory is Ownable, IProjectFactory {
+contract ProjectFactory is Ownable {
     address payable private _wallet;
     IAstranoVestingWallet private _feeVestingWallet;
     uint256 private _creationFee;
@@ -30,6 +29,42 @@ contract ProjectFactory is Ownable, IProjectFactory {
     ITokenFactory private _tokenFactory;
     ICrowdsaleFactory private _crowdsaleFactory;
     IVestingWalletFactory private _vestingWalletFactory;
+
+    struct Project {
+        address creator;
+        address pairToken;
+        address crowdsale;
+        address vestingWallet;
+        uint64 tokenLockStartIn;
+        uint64 tokenLockDuration;
+        uint256 crowdsaleRate;
+        uint256 crowdsaleCap;
+        uint256 crowdsaleGoal;
+        uint256 liquidityRate;
+        uint64 liquidityLockStartIn;
+        uint64 liquidityLockDuration;
+        uint8 liquidityPercentage;
+        bool finalized;
+    }
+
+    struct NewProject {
+        string tokenName;
+        string tokenSymbol;
+        uint256 tokenTotalSupply;
+        uint64 tokenLockStartIn;
+        uint64 tokenLockDuration;
+        uint256 crowdsaleRate;
+        uint256 crowdsaleCap;
+        uint256 crowdsaleIndividualCap;
+        uint256 crowdsaleMinPurchaseAmount;
+        uint256 crowdsaleGoal;
+        uint64 crowdsaleOpeningTime;
+        uint64 crowdsaleClosingTime;
+        uint256 liquidityRate;
+        uint64 liquidityLockStartIn;
+        uint64 liquidityLockDuration;
+        uint256 liquidityPercentage; // Variable packing inefficient here
+    }
 
     event ProjectCreated(
         address creator,
@@ -213,14 +248,24 @@ contract ProjectFactory is Ownable, IProjectFactory {
     }
 
     /**
+     * @param token_ token address
+     * @return project data for `token_`
+     */
+    function project(address token_) external view returns (Project memory) {
+        return _projects[token_];
+    }
+
+    /**
      * @dev Create new project
      */
     function createProject(NewProject calldata data_) external payable {
         require(msg.value >= _creationFee, "insufficient funds sent");
 
         // Validate liquidity parameters as these are checked only when finalizing the project
+        require(data_.liquidityRate > 0, "liquidityRate is 0");
         require(data_.liquidityPercentage <= 100, "liquidityPercentage > 100");
         require(data_.liquidityLockStartIn > 0, "liquidityLockStartIn is 0");
+        require(data_.liquidityLockDuration > 0, "liquidityLockDuration is 0");
 
         uint256 tokenFeeAmount = (data_.tokenTotalSupply * _tokenFee) / 10000;
 
@@ -253,20 +298,21 @@ contract ProjectFactory is Ownable, IProjectFactory {
         address vestingWallet = _vestingWalletFactory.createVestingWallet(msg.sender);
 
         // Store project data
-        Project memory project;
-        project.creator = msg.sender;
-        project.pairToken = address(_pairToken);
-        project.crowdsale = crowdsale;
-        project.vestingWallet = vestingWallet;
-        project.tokenLockStartIn = data_.tokenLockStartIn;
-        project.tokenLockDuration = data_.tokenLockDuration;
-        project.crowdsaleRate = data_.crowdsaleRate;
-        project.crowdsaleGoal = data_.crowdsaleGoal;
-        project.liquidityRate = data_.liquidityRate;
-        project.liquidityLockStartIn = uint64(data_.liquidityLockStartIn);
-        project.liquidityLockDuration = uint64(data_.liquidityLockDuration);
-        project.liquidityPercentage = uint8(data_.liquidityPercentage);
-        _projects[token] = project;
+        Project memory _project;
+        _project.creator = msg.sender;
+        _project.pairToken = address(_pairToken);
+        _project.crowdsale = crowdsale;
+        _project.vestingWallet = vestingWallet;
+        _project.tokenLockStartIn = data_.tokenLockStartIn;
+        _project.tokenLockDuration = data_.tokenLockDuration;
+        _project.crowdsaleRate = data_.crowdsaleRate;
+        _project.crowdsaleCap = data_.crowdsaleCap;
+        _project.crowdsaleGoal = data_.crowdsaleGoal;
+        _project.liquidityRate = data_.liquidityRate;
+        _project.liquidityLockStartIn = uint64(data_.liquidityLockStartIn);
+        _project.liquidityLockDuration = uint64(data_.liquidityLockDuration);
+        _project.liquidityPercentage = uint8(data_.liquidityPercentage);
+        _projects[token] = _project;
 
         // Vest remaining tokens
         uint256 vestingTokenAmount = data_.tokenTotalSupply - requiredTotalSupply;
@@ -296,52 +342,54 @@ contract ProjectFactory is Ownable, IProjectFactory {
      * @dev Finalize a project
      */
     function finalizeProject(address token_) external {
-        Project memory project = _projects[token_];
+        Project memory _project = _projects[token_];
 
-        _preValidateFinalizeProject(project);
+        _preValidateFinalizeProject(_project);
 
-        project.finalized = true;
+        _project.finalized = true;
 
         // Crowdsale will give `pairTokenAmount` as the allowance of this contract (spender) for the project's pair token
-        uint256 pairTokenAmount = ICrowdsale(project.crowdsale).finalize();
+        uint256 pairTokenAmount = ICrowdsale(_project.crowdsale).finalize();
+        SafeERC20.safeTransferFrom(IERC20(_project.pairToken), _project.crowdsale, address(this), pairTokenAmount);
 
-        // Calculate liquidity token amounts
-        require(pairTokenAmount * project.crowdsaleRate >= project.crowdsaleGoal, "insuf pair token allowance");
-        SafeERC20.safeTransferFrom(IERC20(project.pairToken), project.crowdsale, address(this), pairTokenAmount);
-        uint256 liquidityPairTokenAmount = (pairTokenAmount * project.liquidityPercentage) / 100;
-        uint256 liquidityTokenAmount = liquidityPairTokenAmount * project.liquidityRate;
+        // Calculate liquidity token amounts (liquidity percentage is )
+        uint256 maxLiquidityPairTokenAmount = ((_project.crowdsaleCap / _project.crowdsaleRate) *
+            _project.liquidityPercentage) / 100;
+        uint256 liquidityPairTokenAmount = maxLiquidityPairTokenAmount <= pairTokenAmount
+            ? maxLiquidityPairTokenAmount
+            : pairTokenAmount;
+        uint256 liquidityTokenAmount = liquidityPairTokenAmount * _project.liquidityRate;
         uint256 tokenBalance = IERC20(token_).balanceOf(address(this));
-        require(tokenBalance >= liquidityTokenAmount, "insuf token balance");
 
         (address liquidityPair, uint256 liquidityAmount) = _generateLiquidity(
             token_,
-            project.pairToken,
+            _project.pairToken,
             liquidityTokenAmount,
             liquidityPairTokenAmount,
-            project.vestingWallet,
-            project.liquidityLockStartIn,
-            project.liquidityLockDuration
+            _project.vestingWallet,
+            _project.liquidityLockStartIn,
+            _project.liquidityLockDuration
         );
 
         // Vest remaining pair tokens
         uint256 remainingPairTokenAmount = pairTokenAmount - liquidityPairTokenAmount;
         if (remainingPairTokenAmount > 0) {
-            IERC20(project.pairToken).transfer(project.creator, remainingPairTokenAmount);
+            IERC20(_project.pairToken).transfer(_project.creator, remainingPairTokenAmount);
         }
 
         // Vest remaining tokens
         uint256 remainingTokenAmount = tokenBalance - liquidityTokenAmount;
         if (remainingTokenAmount > 0) {
-            IERC20(token_).approve(project.vestingWallet, remainingTokenAmount);
-            IVestingWallet(project.vestingWallet).deposit(
+            IERC20(token_).approve(_project.vestingWallet, remainingTokenAmount);
+            IVestingWallet(_project.vestingWallet).deposit(
                 token_,
                 remainingTokenAmount,
-                project.tokenLockStartIn,
-                project.tokenLockDuration
+                _project.tokenLockStartIn,
+                _project.tokenLockDuration
             );
         }
 
-        delete project; // FIXME: Will this work?
+        delete _projects[token_]; // FIXME: Will this work?
 
         emit ProjectFinalized(
             token_,
@@ -353,9 +401,9 @@ contract ProjectFactory is Ownable, IProjectFactory {
         );
     }
 
-    function _preValidateFinalizeProject(Project memory project) private pure {
-        require(project.pairToken != address(0), "project not found");
-        require(!project.finalized, "project already finalized");
+    function _preValidateFinalizeProject(Project memory _project) private pure {
+        require(_project.pairToken != address(0), "project not found");
+        require(!_project.finalized, "project already finalized");
     }
 
     function _generateLiquidity(

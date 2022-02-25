@@ -5,7 +5,7 @@ import '@nomiclabs/hardhat-waffle'
 import '@typechain/hardhat'
 import 'hardhat-gas-reporter'
 import 'solidity-coverage'
-import "hardhat-contract-sizer";
+import 'hardhat-contract-sizer'
 
 dotenv.config()
 
@@ -25,10 +25,9 @@ task('accounts', 'Prints the list of accounts', async (_taskArgs, hre) => {
 const config: HardhatUserConfig = {
 	solidity: '0.8.9',
 	networks: {
-		testnet: {
+		bscTestnet: {
 			url: 'https://data-seed-prebsc-1-s1.binance.org:8545',
 			chainId: 97,
-			// gasPrice: 20000000000,
 			accounts: [
 				'aaf7b09474b73cf7ab1a2d5968f053f307bf6e4fca005ce070cff1a1fe3b8f0c',
 			],
@@ -45,9 +44,9 @@ const config: HardhatUserConfig = {
 		enabled: process.env.REPORT_GAS !== undefined,
 		currency: 'USD',
 	},
-	// etherscan: {
-	// 	apiKey: process.env.ETHERSCAN_API_KEY,
-	// },
+	etherscan: {
+		apiKey: process.env.ETHERSCAN_API_KEY,
+	},
 	typechain: {
 		outDir: 'src/types',
 		target: 'ethers-v5',

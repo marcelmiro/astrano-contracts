@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.9;
+pragma solidity 0.8.9;
 
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./interfaces/IAstranoVestingWallet.sol";
@@ -125,8 +125,6 @@ contract AstranoVestingWallet is IAstranoVestingWallet {
         _vestings[token].released += unreleased;
         SafeERC20.safeTransfer(IERC20(token), _beneficiary, unreleased);
         emit Released(token, unreleased);
-        if (finished) {
-            delete _vestings[token];
-        }
+        if (finished) delete _vestings[token];
     }
 }

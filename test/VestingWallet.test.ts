@@ -17,10 +17,14 @@ const {
 } = ethers
 const { deployContract } = waffle
 
+const createToken = (signer: SignerWithAddress, supply = 1_000_000) => {
+	const tokenArgs = ['Token', 'TKN', supply, signer.address]
+	return deployContract(signer, TokenArtifact, tokenArgs) as Promise<Token>
+}
+
 describe('VestingWallet', async function () {
 	let signers: SignerWithAddress[]
 	let vestingWallet: VestingWallet
-	let token: Token
 
 	const beneficiary = () => signers[1]
 	const beneficiaryAddr = () => beneficiary().address
@@ -30,17 +34,10 @@ describe('VestingWallet', async function () {
 		time: number,
 		start: number,
 		duration: number,
-	) => (balance * (time - start)) / duration
+	) => Math.floor((balance * (time - start)) / duration)
 
 	before(async function () {
 		signers = await getSigners()
-
-		const tokenArgs = ['Token', 'TKN', 100_000_000, signers[0].address]
-		token = (await deployContract(
-			signers[0],
-			TokenArtifact,
-			tokenArgs,
-		)) as Token
 	})
 
 	it('Should create contract with correct parameters', async function () {
@@ -67,10 +64,16 @@ describe('VestingWallet', async function () {
 	})
 
 	context('deposit', function () {
+		let token: Token
+
+		before(async function () {
+			token = await createToken(signers[0], 100_000_000)
+		})
+
 		it('Should allow to deposit with correct parameters', async function () {
-			const amount = 10
-			const startIn = 250
-			const duration = 500
+			const amount = 1000
+			const startIn = 2500
+			const duration = 5000
 
 			await token.approve(vestingWallet.address, amount)
 			await vestingWallet.deposit(
@@ -80,17 +83,17 @@ describe('VestingWallet', async function () {
 				duration,
 			)
 
-			const time = await getTime()
+			const [time, actualAmount, actualStart, actualDuration] =
+				await Promise.all([
+					getTime(),
+					token.balanceOf(vestingWallet.address),
+					vestingWallet.start(token.address),
+					vestingWallet.duration(token.address),
+				])
 
-			expect(await token.balanceOf(vestingWallet.address)).to.equal(
-				amount,
-			)
-			expect(await vestingWallet.start(token.address)).to.equal(
-				time + startIn,
-			)
-			expect(await vestingWallet.duration(token.address)).to.equal(
-				duration,
-			)
+			expect(actualAmount).to.equal(amount)
+			expect(actualStart).to.equal(time + startIn)
+			expect(actualDuration).to.equal(duration)
 		})
 
 		it('Should not allow to deposit if amount is 0', async function () {
@@ -101,14 +104,9 @@ describe('VestingWallet', async function () {
 		})
 
 		it('Should not allow to deposit if duration is 0', async function () {
-			const tokenArgs = ['Token2', 'TKN2', 1000000, signers[0].address]
-			const token = (await deployContract(
-				signers[0],
-				TokenArtifact,
-				tokenArgs,
-			)) as Token
+			const token = await createToken(signers[0], 1_000_000)
 
-			const amount = 10
+			const amount = 500
 			await token.approve(vestingWallet.address, amount)
 			await expectRevert(
 				vestingWallet.deposit(token.address, amount, 50, 0),
@@ -117,56 +115,44 @@ describe('VestingWallet', async function () {
 		})
 
 		it('Should allow to redeposit and maintain vesting parameters', async function () {
-			const tokenArgs = ['Token3', 'TKN3', 1000000, signers[0].address]
-			const token = (await deployContract(
-				signers[0],
-				TokenArtifact,
-				tokenArgs,
-			)) as Token
+			const _start = await vestingWallet.start(token.address)
+			if (_start.eq(0)) {
+				const amount = 750
+				await token.approve(vestingWallet.address, amount)
+				await vestingWallet.deposit(token.address, amount, 1000, 2500)
+			}
 
-			const amountA = 5
-			const amountB = 8
-			const startIn = 250
-			const duration = 500
+			const amount = 1250
+			const [start, duration] = await Promise.all([
+				vestingWallet.start(token.address),
+				vestingWallet.duration(token.address),
+			])
 
-			await token.approve(vestingWallet.address, amountA + amountB)
-			await vestingWallet.deposit(
-				token.address,
-				amountA,
-				startIn,
-				duration,
+			await setTime(start.toNumber() + duration.toNumber() * 0.5)
+
+			await token.approve(vestingWallet.address, amount)
+			await vestingWallet.deposit(token.address, amount, 0, 0)
+
+			const [startAfterDeposit, durationAfterDeposit] = await Promise.all(
+				[
+					vestingWallet.start(token.address),
+					vestingWallet.duration(token.address),
+				],
 			)
 
-			const tokenStart = await vestingWallet.start(token.address)
-			const newTime = (await getTime()) + 300
-			await setTime(newTime)
-			await vestingWallet.deposit(token.address, amountB, 0, 0)
-
-			expect(await token.balanceOf(vestingWallet.address)).to.equal(
-				amountA + amountB,
-			)
-			expect(await vestingWallet.start(token.address)).to.equal(
-				tokenStart,
-			)
-			expect(await vestingWallet.duration(token.address)).to.equal(
-				duration,
-			)
+			expect(startAfterDeposit).to.equal(start)
+			expect(durationAfterDeposit).to.equal(duration)
 		})
 	})
 
 	context('releasable', function () {
 		let token: Token
-		const amount = 50
-		const startIn = 500
-		const duration = 750
+		const amount = 800
+		const startIn = 5000
+		const duration = 7500
 
 		before(async function () {
-			const tokenArgs = ['Token', 'TKN', 1000000, signers[0].address]
-			token = (await deployContract(
-				signers[0],
-				TokenArtifact,
-				tokenArgs,
-			)) as Token
+			token = await createToken(signers[0], 1_000_000)
 
 			await token.approve(vestingWallet.address, amount)
 			await vestingWallet.deposit(
@@ -186,9 +172,8 @@ describe('VestingWallet', async function () {
 		})
 
 		it('Should return (0, false) before vesting start', async function () {
-			const vestingStart = await vestingWallet.start(token.address)
-			await setTime(vestingStart.toNumber())
-
+			const start = await vestingWallet.start(token.address)
+			await setTime(start.toNumber())
 			const [releasable, finished] = await vestingWallet.releasable(
 				token.address,
 			)
@@ -197,20 +182,20 @@ describe('VestingWallet', async function () {
 		})
 
 		it('Should return (linear vesting curve, false) while vesting is active', async function () {
-			const [_tokenBalance, _vestingStart] = await Promise.all([
+			const [_balance, _start] = await Promise.all([
 				token.balanceOf(vestingWallet.address),
 				vestingWallet.start(token.address),
 			])
-			const tokenBalance = _tokenBalance.toNumber()
-			const vestingStart = _vestingStart.toNumber()
+			const balance = _balance.toNumber()
+			const start = _start.toNumber()
 
-			const newTime = vestingStart + duration * 0.68
+			const newTime = start + duration * 0.68
 			await setTime(newTime)
 
 			const expectedReleasable = calculateReleasable(
-				tokenBalance,
+				balance,
 				newTime,
-				vestingStart,
+				start,
 				duration,
 			)
 
@@ -222,25 +207,28 @@ describe('VestingWallet', async function () {
 		})
 
 		it('Should return (token balance, true) after vesting finish', async function () {
-			const vestingStart = await vestingWallet.start(token.address)
-			await setTime(vestingStart.toNumber() + duration)
-
-			const tokenBalance = await token.balanceOf(vestingWallet.address)
+			const start = await vestingWallet.start(token.address)
+			await setTime(start.toNumber() + duration)
+			const balance = await token.balanceOf(vestingWallet.address)
 			const [releasable, finished] = await vestingWallet.releasable(
 				token.address,
 			)
-			expect(tokenBalance).to.equal(amount)
-			expect(releasable).to.equal(tokenBalance)
+			expect(balance).to.equal(amount)
+			expect(releasable).to.equal(balance)
 			expect(finished).to.be.true
 		})
 	})
 
 	context('release', function () {
-		const amount = 2500
-		const startIn = 7500
-		const duration = 10000
+		let token: Token
 
 		before(async function () {
+			token = await createToken(signers[0], 1_000_000)
+
+			const amount = 2500
+			const startIn = 7500
+			const duration = 10000
+
 			await token.approve(vestingWallet.address, amount)
 			await vestingWallet.deposit(
 				token.address,
@@ -251,65 +239,63 @@ describe('VestingWallet', async function () {
 		})
 
 		it('Should allow to release with correct parameters', async function () {
-			const vestingStart = await vestingWallet.start(token.address)
+			const [start, duration] = await Promise.all([
+				vestingWallet.start(token.address),
+				vestingWallet.duration(token.address),
+			])
 
-			const newTime = vestingStart.toNumber() + duration * 0.75
-			console.log({ newTime })
+			const newTime = Math.floor(
+				start.toNumber() + duration.toNumber() * 0.8,
+			)
 			await setTime(newTime)
 
+			const [_contractBalance, _beneficiaryBalance, _releasedBefore] =
+				await Promise.all([
+					token.balanceOf(vestingWallet.address),
+					token.balanceOf(beneficiaryAddr()),
+					vestingWallet.released(token.address),
+				])
+			const contractBalance = _contractBalance.toNumber()
+			const beneficiaryBalance = _beneficiaryBalance.toNumber()
+			const releasedBefore = _releasedBefore.toNumber()
+
+			await vestingWallet.release(token.address)
+			const released = calculateReleasable(
+				contractBalance,
+				await getTime(),
+				start.toNumber(),
+				duration.toNumber(),
+			)
+
 			const [
-				_contractTokenBalance,
-				_beneficiaryTokenBalance,
-				_releasedBefore,
+				newContractBalance,
+				newBeneficiaryBalance,
+				expectedReleased,
 			] = await Promise.all([
 				token.balanceOf(vestingWallet.address),
 				token.balanceOf(beneficiaryAddr()),
 				vestingWallet.released(token.address),
 			])
-			console.log({
-				_contractTokenBalance,
-				_beneficiaryTokenBalance,
-				_releasedBefore,
-			})
-			const contractTokenBalance = _contractTokenBalance.toNumber()
-			const beneficiaryTokenBalance = _beneficiaryTokenBalance.toNumber()
-			const releasedBefore = _releasedBefore.toNumber()
 
-			await vestingWallet.release(token.address)
-
-			const released = calculateReleasable(
-				contractTokenBalance,
-				await getTime(),
-				vestingStart.toNumber(),
-				duration,
+			expect(newContractBalance).to.equal(contractBalance - released)
+			expect(newBeneficiaryBalance).to.equal(
+				beneficiaryBalance + released,
 			)
-			console.log({ released })
-
-			const newContractTokenBalance = await token.balanceOf(
-				vestingWallet.address,
-			)
-			const newBeneficiaryTokenBalance = await token.balanceOf(
-				beneficiaryAddr(),
-			)
-			expect(newContractTokenBalance).to.equal(
-				contractTokenBalance - released,
-			)
-			expect(newBeneficiaryTokenBalance).to.equal(
-				beneficiaryTokenBalance + released,
-			)
-			expect(await vestingWallet.released(token.address)).to.equal(
-				releasedBefore + released,
-			)
+			expect(expectedReleased).to.equal(releasedBefore + released)
 		})
 
 		it('Should delete token vesting data after releasing if vesting has finished', async function () {
-			const vestingStart = await vestingWallet.start(token.address)
-			expect(vestingStart.toNumber()).to.be.greaterThan(0)
+			const [start, duration] = await Promise.all([
+				vestingWallet.start(token.address),
+				vestingWallet.duration(token.address),
+			])
 
-			await setTime(vestingStart.toNumber() + duration)
+			expect(start.toNumber()).to.be.greaterThan(0)
+			await setTime(start.add(duration).toNumber())
 
 			await vestingWallet.release(token.address)
 			expect(await vestingWallet.start(token.address)).to.equal(0)
+			expect(await vestingWallet.duration(token.address)).to.equal(0)
 			expect(await vestingWallet.released(token.address)).to.equal(0)
 		})
 
@@ -324,37 +310,38 @@ describe('VestingWallet', async function () {
 		})
 
 		it('Should decrease releasable amount after releasing', async function () {
-			const tokenArgs = ['Token2', 'TKN2', 1_000_000, signers[0].address]
-			const token = (await deployContract(
-				signers[0],
-				TokenArtifact,
-				tokenArgs,
-			)) as Token
-
 			const amount = 200
+			const _startIn = 500
+			const _duration = 1500
+
 			await token.approve(vestingWallet.address, amount)
 			await vestingWallet.deposit(
 				token.address,
 				amount,
-				startIn,
-				duration,
+				_startIn,
+				_duration,
 			)
 
-			const vestingStart = await vestingWallet.start(token.address)
-			const newTime = vestingStart.toNumber() + duration * 0.5
+			const [start, duration, contractBalance] = await Promise.all([
+				vestingWallet.start(token.address),
+				vestingWallet.duration(token.address),
+				token.balanceOf(vestingWallet.address),
+			])
+
+			const newTime = start.toNumber() + duration.toNumber() * 0.85
 			await setTime(newTime)
-			await vestingWallet.release(token.address)
 
+			await vestingWallet.release(token.address)
 			const released = calculateReleasable(
-				amount,
+				contractBalance.toNumber(),
 				await getTime(),
-				vestingStart.toNumber(),
-				duration,
+				start.toNumber(),
+				duration.toNumber(),
 			)
 
-			await setTime(vestingStart.toNumber() + duration)
+			await setTime(start.add(duration).toNumber())
 			const [releasable] = await vestingWallet.releasable(token.address)
-			expect(releasable).to.equal(amount - released)
+			expect(releasable).to.equal(contractBalance.sub(released))
 		})
 	})
 })

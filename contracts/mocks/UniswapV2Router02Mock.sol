@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.9;
+pragma solidity 0.8.9;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "../mocks/UniswapV2FactoryMock.sol";
 
 library Math {
     /**
@@ -52,8 +53,8 @@ contract UniswapV2Router02Mock {
     {
         IERC20(tokenA).transferFrom(msg.sender, address(this), amountADesired);
         IERC20(tokenB).transferFrom(msg.sender, address(this), amountBDesired);
-
         uint256 liquidityAmount = Math.sqrt(amountADesired * amountBDesired);
+        UniswapV2FactoryMock(_factory).transferPair(tokenA, tokenB, to, liquidityAmount);
         return (amountADesired, amountBDesired, liquidityAmount);
     }
 }

@@ -45,33 +45,42 @@ describe('AstranoVestingWallet', async function () {
 			args,
 		)) as AstranoVestingWallet
 
-		expect(await astranoVestingWallet.beneficiary()).to.equal(
-			beneficiaryAddr(),
-		)
-		expect(await astranoVestingWallet.startIn()).to.equal(startIn)
-		expect(await astranoVestingWallet.duration()).to.equal(duration)
+		const [actualBeneficiary, actualStartIn, actualDuration] =
+			await Promise.all([
+				astranoVestingWallet.beneficiary(),
+				astranoVestingWallet.startIn(),
+				astranoVestingWallet.duration(),
+			])
+
+		expect(actualBeneficiary).to.equal(beneficiaryAddr())
+		expect(actualStartIn).to.equal(startIn)
+		expect(actualDuration).to.equal(duration)
 	})
 
 	it('Should revert on create contract with incorrect parameters', async function () {
-		const deployBeneficiaryAddressZero = deployContract(
-			signers[0],
-			AstranoVestingWalletArtifact,
-			[AddressZero, startIn, duration],
-		)
+		const deploys = [
+			{
+				args: [AddressZero, startIn, duration],
+				message: 'beneficiary is the zero address',
+			},
+			{
+				args: [beneficiaryAddr(), startIn, 0],
+				message: 'duration is 0',
+			},
+		]
 
-		const deployDurationZero = deployContract(
-			signers[0],
-			AstranoVestingWalletArtifact,
-			[beneficiaryAddr(), startIn, 0],
-		)
-
-		await Promise.all([
-			expectRevert(
-				deployBeneficiaryAddressZero,
-				'beneficiary is the zero address',
+		await Promise.all(
+			deploys.map((d) =>
+				expectRevert(
+					deployContract(
+						signers[0],
+						AstranoVestingWalletArtifact,
+						d.args,
+					),
+					d.message,
+				),
 			),
-			expectRevert(deployDurationZero, 'duration is 0'),
-		])
+		)
 	})
 
 	context('setBeneficiary', function () {
